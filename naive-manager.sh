@@ -341,17 +341,37 @@ install_or_reconfig() {
         if [[ "$cert_choice" == "1" ]]; then
             CERT_TYPE="cloudflare"
             echo -e "${YELLOW}提示: 前往 Cloudflare -> My Profile -> API Tokens -> 创建拥有 'Zone - DNS - Edit' 权限的 Token。${PLAIN}"
-            read -rp "请输入 Cloudflare API Token: " CF_API_TOKEN
-            if [[ "$CF_API_TOKEN" == "0" || "$CF_API_TOKEN" == "b" ]]; then return; fi
-            # 去除首尾可能误复制的空格或制表符
-            CF_API_TOKEN=$(echo "$CF_API_TOKEN" | tr -d ' \r\n\t')
-            while [[ -z "$CF_API_TOKEN" ]]; do
-                read -rp "Token 不能为空，请重新输入: " CF_API_TOKEN
+            while true; do
+                read -rp "请输入 Cloudflare API Token: " CF_API_TOKEN
                 if [[ "$CF_API_TOKEN" == "0" || "$CF_API_TOKEN" == "b" ]]; then return; fi
                 CF_API_TOKEN=$(echo "$CF_API_TOKEN" | tr -d ' \r\n\t')
+                if [[ -z "$CF_API_TOKEN" ]]; then
+                    log_warn "Token 不能为空，请重新输入！"
+                    continue
+                fi
+
+                log_info "正在验证 Cloudflare API 连通性与 Token 有效性..."
+                local cf_resp
+                cf_resp=$(curl -s --max-time 10 -X GET "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+                    -H "Authorization: Bearer ${CF_API_TOKEN}" 2>/dev/null || true)
+
+                if [[ -z "$cf_resp" ]]; then
+                    log_warn "无法连接到 Cloudflare API 服务器 (请求超时或网络被墙)。"
+                    read -rp "是否忽略此网络警告强制继续使用此 Token？[y/N]: " force_use
+                    if [[ "$force_use" =~ ^[Yy]$ ]]; then
+                        break
+                    fi
+                elif echo "$cf_resp" | grep -q '"status":"active"'; then
+                    log_info "Cloudflare 连通性测试通过！Token 状态有效 (status: active)。"
+                    break
+                else
+                    log_err "Cloudflare Token 校验失败！服务端返回错误信息:"
+                    local err_msg
+                    err_msg=$(echo "$cf_resp" | grep -o '"message":"[^"]*"' | head -n 1 || echo "$cf_resp")
+                    echo -e "${RED}  -> ${err_msg}${PLAIN}"
+                    echo -e "${YELLOW}请核对 Token 权限是否包含 'Zone - DNS - Edit'，并重新输入 (或输入 0 返回):${PLAIN}"
+                fi
             done
-            local token_len=${#CF_API_TOKEN}
-            log_info "Cloudflare API Token 格式已确认！(Token 长度: ${token_len} 位)"
         elif [[ "$cert_choice" == "2" ]]; then
             CERT_TYPE="local_file"
             detect_ssl_certs "$DOMAIN"
@@ -529,7 +549,7 @@ services:
   caddy:
     image: ${IMAGE_NAME}
     container_name: ${CONTAINER_NAME}
-    restart: always
+    restart: unless-stopped
     ${port_mapping}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
@@ -560,9 +580,56 @@ EOF
         (crontab -l 2>/dev/null | grep -F "${CONTAINER_NAME}") || (crontab -l 2>/dev/null; echo "$cron_cmd") | crontab -
     fi
 
-    log_info "正在启动 NaiveProxy Caddy 容器服务..."
+    log_info "正在启动 Naive-Caddy 容器服务..."
     $DOCKER_COMPOSE_CMD pull || true
     $DOCKER_COMPOSE_CMD up -d
+
+    # ---------------- 启动与证书状态巡检 ----------------
+    echo -e "\n${CYAN}---------------- 正在验证容器启动与证书就绪状态 ----------------${PLAIN}"
+    local is_healthy=0
+    for ((i=1; i<=15; i++)); do
+        local c_status
+        c_status=$(docker inspect -f '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null || echo "missing")
+
+        if [[ "$c_status" == "running" ]]; then
+            # 检查是否有致命报错
+            local recent_logs
+            recent_logs=$(docker logs --tail 25 "${CONTAINER_NAME}" 2>&1 || true)
+            if echo "$recent_logs" | grep -qiE "error.*loading.*config|fatal.*caddy|API token.*invalid"; then
+                log_err "检测到 Caddy 配置或证书加载异常！"
+                echo -e "${RED}最新错误日志:${PLAIN}"
+                echo "$recent_logs" | grep -iE "error|invalid" | tail -n 5
+                is_healthy=2
+                break
+            fi
+
+            # 检查是否成功启动 HTTP 服务器
+            if echo "$recent_logs" | grep -q "serving initial configuration"; then
+                log_info "Caddy 服务已成功加载配置并就绪运行！(耗时 ${i}s)"
+                is_healthy=1
+                break
+            fi
+        elif [[ "$c_status" == "restarting" ]]; then
+            log_warn "容器处于异常重启状态，正在抓取错误原因..."
+            docker logs --tail 10 "${CONTAINER_NAME}" 2>&1 | tail -n 6
+            is_healthy=2
+            break
+        fi
+        sleep 1
+    done
+
+    if [[ $is_healthy -eq 2 ]]; then
+        log_err "服务启动失败！容器已自动停止以防止无限循环崩溃重启。"
+        docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+        echo -e "${YELLOW}建议排查方案:${PLAIN}"
+        echo " 1. 若使用 Cloudflare，请检查域名是否添加在 Cloudflare 账户下，且 Token 拥有该域名的编辑权限；"
+        echo " 2. 检查公网端口 ${LISTEN_PORT} 是否已被宿主机其他软件绑定或防火墙拦截；"
+        echo " 3. 运行 ./naive-manager.sh 重新选择证书方案配置。"
+        read -rp "按回车键返回主菜单..."
+        return
+    elif [[ $is_healthy -eq 0 ]]; then
+        log_warn "服务仍在后台初始化申请证书中，请留意日志。"
+    fi
 
     # 展示完整凭据与二维码
     show_user_credentials "${USERNAME}" "${PASSWORD}"
