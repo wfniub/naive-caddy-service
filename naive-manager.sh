@@ -19,8 +19,16 @@ GITHUB_REPO="wfniub/naive-caddy-service"
 IMAGE_NAME="ghcr.io/wfniub/naive-caddy:latest"
 CONTAINER_NAME="naive-caddy"
 
-# 默认全局工作目录为脚本运行所在绝对路径
-INITIAL_DIR="$(pwd)"
+# 可靠获取脚本自身绝对路径与执行目录
+if [[ -n "$BASH_SOURCE" ]]; then
+    SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+elif [[ -n "$0" ]]; then
+    SCRIPT_PATH="$(readlink -f "$0")"
+else
+    SCRIPT_PATH="$(pwd)/naive-manager.sh"
+fi
+
+INITIAL_DIR="$(dirname "$SCRIPT_PATH")"
 APP_DIR="${INITIAL_DIR}"
 COMPOSE_FILE="${APP_DIR}/docker-compose.yml"
 CADDY_FILE="${APP_DIR}/Caddyfile"
@@ -804,10 +812,14 @@ check_version_and_update() {
         return
     fi
 
+    # 提取主版本号 (例如 v2026.10.21-xxxx -> v2026.10.21) 用于智能对比
+    local norm_local="${CURRENT_VERSION%%-*}"
+    local norm_remote="${latest_tag%%-*}"
+
     echo -e " 本地脚本版本 : ${CYAN}${CURRENT_VERSION}${PLAIN}"
     echo -e " 线上最新版本 : ${GREEN}${latest_tag}${PLAIN}"
 
-    if [[ "${CURRENT_VERSION}" == "${latest_tag}" ]]; then
+    if [[ "${CURRENT_VERSION}" == "${latest_tag}" || "${norm_local}" == "${norm_remote}" ]]; then
         log_info "当前已是最新版本，无需更新！"
         read -rp "按回车键返回..."
         return
@@ -823,9 +835,15 @@ check_version_and_update() {
     read -rp "是否立即执行在线平滑更新？[Y/n]: " do_update
     do_update="${do_update:-Y}"
     if [[ "$do_update" =~ ^[Yy]$ ]]; then
-        log_info "正在下载最新脚本并更新当前管理器..."
-        curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPO}/main/naive-manager.sh" -o "${SCRIPT_PATH}"
-        chmod +x "${SCRIPT_PATH}"
+        # 确保下载目标绝对路径有效
+        local target_script="${SCRIPT_PATH}"
+        if [[ -z "$target_script" || "$target_script" == "." || "$target_script" == "/" ]]; then
+            target_script="${APP_DIR}/naive-manager.sh"
+        fi
+
+        log_info "正在下载最新脚本 [${target_script}]..."
+        curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPO}/main/naive-manager.sh" -o "${target_script}"
+        chmod +x "${target_script}"
 
         if [[ -f "${COMPOSE_FILE}" ]]; then
             log_info "正在拉取最新 Docker 镜像并平滑重启容器..."
@@ -835,7 +853,7 @@ check_version_and_update() {
         fi
         log_info "🎉 平滑升级完成！现有配置、证书及用户凭据完全保持不变。"
         read -rp "按回车键重新载入新版本..."
-        exec "${SCRIPT_PATH}"
+        exec bash "${target_script}"
     else
         log_info "已取消更新。"
         read -rp "按回车键返回..."
