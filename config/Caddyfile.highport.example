@@ -1,0 +1,23 @@
+{
+    auto_https off
+    order forward_proxy before file_server
+    order forward_proxy before reverse_proxy
+    servers {
+        protocols h1 h2
+    }
+}
+
+:{$LISTEN_PORT}, {$DOMAIN}:{$LISTEN_PORT} {
+    tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem
+
+    forward_proxy {
+        basic_auth {$USERNAME} {$PASSWORD}
+        hide_ip
+        hide_via
+        probe_resistance
+    }
+
+    # 未授权访问或探针回落至内置高逼真企业边缘网关
+    root * /var/www/html
+    file_server
+}

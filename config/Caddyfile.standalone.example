@@ -1,0 +1,26 @@
+{
+    order forward_proxy before file_server
+    order forward_proxy before reverse_proxy
+    servers {
+        protocols h1 h2 h3
+    }
+}
+
+:443, {$DOMAIN} {
+    tls {$EMAIL}
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        Alt-Svc 'h3=":443"; ma=2592000'
+    }
+
+    forward_proxy {
+        basic_auth {$USERNAME} {$PASSWORD}
+        hide_ip
+        hide_via
+        probe_resistance
+    }
+
+    root * /var/www/html
+    file_server
+}

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cloud Infrastructure & Application Gateway</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --text: #1e293b;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --border: #e2e8f0;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        header {
+            background-color: var(--card-bg);
+            border-bottom: 1px solid var(--border);
+            padding: 1.25rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .logo { font-size: 1.25rem; font-weight: 700; color: var(--primary); letter-spacing: -0.025em; }
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+            background: #ecfdf5;
+            color: #065f46;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-weight: 500;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #10b981;
+            border-radius: 50%;
+            box-shadow: 0 0 0 2px #d1fae5;
+        }
+        main {
+            max-width: 960px;
+            margin: 3rem auto;
+            padding: 0 1.5rem;
+            flex: 1;
+        }
+        .hero {
+            text-align: center;
+            margin-bottom: 3.5rem;
+        }
+        .hero h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: #0f172a;
+            margin-bottom: 1rem;
+            letter-spacing: -0.03em;
+        }
+        .hero p {
+            font-size: 1.125rem;
+            color: #64748b;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 0.75rem;
+            padding: 1.75rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.08);
+        }
+        .card h3 {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: #0f172a;
+        }
+        .card p {
+            font-size: 0.925rem;
+            color: #64748b;
+        }
+        footer {
+            border-top: 1px solid var(--border);
+            background: var(--card-bg);
+            text-align: center;
+            padding: 1.5rem;
+            font-size: 0.875rem;
+            color: #94a3b8;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo">Gateway Edge Service</div>
+        <div class="status-badge">
+            <span class="status-dot"></span>
+            Operational
+        </div>
+    </header>
+    <main>
+        <section class="hero">
+            <h1>Edge Delivery & TLS Termination</h1>
+            <p>High-performance edge reverse proxy and traffic management node. All communication channels are protected with modern cryptographic standards.</p>
+        </section>
+        <div class="grid">
+            <div class="card">
+                <h3>Zero Trust Network</h3>
+                <p>Strict access verification mechanisms are enforced. Automated policy engine filters all non-compliant requests dynamically.</p>
+            </div>
+            <div class="card">
+                <h3>Modern HTTP Architecture</h3>
+                <p>Serving full HTTP/2 and HTTP/3 multiplexing with enterprise-grade connection persistence and latency optimization.</p>
+            </div>
+            <div class="card">
+                <h3>Automated Health Checks</h3>
+                <p>Continuous synthetic probing and telemetry collection guarantee continuous uptime and system reliability.</p>
+            </div>
+        </div>
+    </main>
+    <footer>
+        &copy; 2026 Edge Infrastructure Systems. All rights reserved.
+    </footer>
+</body>
+</html>

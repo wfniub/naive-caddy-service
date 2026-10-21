@@ -1,0 +1,6 @@
+.DS_Store
+Thumbs.db
+*.log
+caddy_data/
+caddy_config/
+.env

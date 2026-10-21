@@ -1,0 +1,153 @@
+name: Build and Push MultiArch Naive-Caddy
+
+on:
+  workflow_dispatch: # 支持在 GitHub 网页手动点击触发构建
+  push:
+    branches:
+      - main
+    paths:
+      - 'Dockerfile'
+      - 'web/**'
+      - '.github/workflows/build-image.yml'
+  schedule:
+    - cron: '0 0 1 * *' # 每月 1 号定时触发拉取最新依赖并编译
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 授予创建 GitHub Release 与 Tags 的权限
+      packages: write # 授予向 GitHub Packages (ghcr.io) 推送镜像的权限
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Generate Release Tag
+        id: tag_gen
+        run: |
+          TAG_NAME="v$(date +'%Y.%m.%d')-${GITHUB_SHA::7}"
+          echo "RELEASE_TAG=${TAG_NAME}" >> "$GITHUB_ENV"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '>=1.26.0'
+
+      - name: Install xcaddy
+        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+
+      - name: Prepare Caddy and Patches (upstream)
+        run: |
+          mkdir -p bin
+          git clone -b naive https://github.com/klzgrad/forwardproxy.git /tmp/forwardproxy
+          CADDY_VERSION="$(cat /tmp/forwardproxy/CADDY_VERSION)"
+          echo "CADDY_VERSION=${CADDY_VERSION}" >> "$GITHUB_ENV"
+
+          # 获取上游 forwardproxy 最新 commit 信息记录更新日志
+          UPSTREAM_MSG=$(git -C /tmp/forwardproxy log -1 --pretty=format:"%s (%h)")
+          echo "UPSTREAM_MSG=${UPSTREAM_MSG}" >> "$GITHUB_ENV"
+
+          git clone --depth 1 -b "$CADDY_VERSION" https://github.com/caddyserver/caddy.git /tmp/caddy-bbr
+          cd /tmp/caddy-bbr
+          git apply /tmp/forwardproxy/caddy-sing-quic-bbrv1.patch
+
+      - name: Compile Caddy for linux/amd64
+        run: |
+          GOOS=linux GOARCH=amd64 ~/go/bin/xcaddy build "${{ env.CADDY_VERSION }}" \
+            --replace "github.com/caddyserver/caddy/v2=/tmp/caddy-bbr" \
+            --with "github.com/caddyserver/forwardproxy=/tmp/forwardproxy" \
+            --with "github.com/caddy-dns/cloudflare" \
+            --output bin/caddy-amd64
+
+      - name: Compile Caddy for linux/arm64
+        run: |
+          GOOS=linux GOARCH=arm64 ~/go/bin/xcaddy build "${{ env.CADDY_VERSION }}" \
+            --replace "github.com/caddyserver/caddy/v2=/tmp/caddy-bbr" \
+            --with "github.com/caddyserver/forwardproxy=/tmp/forwardproxy" \
+            --with "github.com/caddy-dns/cloudflare" \
+            --output bin/caddy-arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Convert Owner to Lowercase
+        id: repo_owner
+        run: echo "OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Build and Push Multi-Arch Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ env.OWNER }}/naive-caddy:latest
+            ghcr.io/${{ env.OWNER }}/naive-caddy:${{ env.RELEASE_TAG }}
+            ghcr.io/${{ env.OWNER }}/naive-caddy:${{ github.sha }}
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "Release ${{ env.RELEASE_TAG }}"
+          body: |
+            ## 🚀 Naive-Caddy 服务自动发布版本
+
+            ### 📝 更新概览与版本详情
+            - **Caddy 核心底座**: `${{ env.CADDY_VERSION }}` (集成 `sing-quic BBRv1` 拥塞控制算法)
+            - **核心通信扩展**: `${{ env.UPSTREAM_MSG }}`
+            - **DNS 自动化扩展**: `caddy-dns/cloudflare` (支持 Cloudflare DNS-01 自动签发续期)
+            - **多架构支持**: `linux/amd64` (x86_64) / `linux/arm64` (aarch64)
+
+            ### 🐳 容器镜像拉取
+            ```bash
+            docker pull ghcr.io/${{ env.OWNER }}/naive-caddy:latest
+            docker pull ghcr.io/${{ env.OWNER }}/naive-caddy:${{ env.RELEASE_TAG }}
+            ```
+
+            ### ⚡ 极速单命令安装与运维
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/naive-manager.sh -o naive-manager.sh && chmod +x naive-manager.sh && sudo ./naive-manager.sh
+            ```
+          files: |
+            bin/caddy-amd64
+            bin/caddy-arm64
+            naive-manager.sh
+
+      - name: Telegram Notification on Success
+        if: success()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            MSG="🚀 <b>Naive-Caddy 镜像编译并发布成功！</b>%0A%0A🏷️ <b>版本标签:</b> <code>${{ env.RELEASE_TAG }}</code>%0A📦 <b>镜像路径:</b> <code>ghcr.io/$OWNER/naive-caddy:latest</code>%0A🌿 <b>分支:</b> <code>${{ github.ref_name }}</code>%0A🎉 <b>Release:</b> <a href=\"${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ env.RELEASE_TAG }}\">点击查看 Release 页面</a>%0A⏱️ <b>工作流:</b> <a href=\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\">点击查看构建详情</a>"
+            curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              -d "chat_id=${TG_CHAT_ID}" \
+              -d "parse_mode=HTML" \
+              -d "text=${MSG}" > /dev/null 2>&1 || true
+          fi
+
+      - name: Telegram Notification on Failure
+        if: failure()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            MSG="❌ <b>Naive-Caddy 镜像编译失败！</b>%0A%0A🌿 <b>分支:</b> <code>${{ github.ref_name }}</code>%0A🔗 <b>Commit:</b> <a href=\"${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}\">${{ github.sha }}</a>%0A⚠️ <b>错误日志:</b> <a href=\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\">点击查看失败日志</a>"
+            curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              -d "chat_id=${TG_CHAT_ID}" \
+              -d "parse_mode=HTML" \
+              -d "text=${MSG}" > /dev/null 2>&1 || true
+          fi
