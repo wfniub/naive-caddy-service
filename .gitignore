@@ -4,3 +4,4 @@ Thumbs.db
 caddy_data/
 caddy_config/
 .env
+DEVELOPMENT.md
