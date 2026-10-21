@@ -160,6 +160,9 @@ load_env() {
     if [[ -f "${ENV_FILE}" ]]; then
         # shellcheck source=/dev/null
         source "${ENV_FILE}"
+        if [[ -n "$LOCAL_VERSION" ]]; then
+            CURRENT_VERSION="$LOCAL_VERSION"
+        fi
     fi
 }
 
@@ -538,6 +541,7 @@ CERT_TYPE=${CERT_TYPE}
 CONTAINER_NAME=${CONTAINER_NAME}
 IMAGE_NAME=${IMAGE_NAME}
 APP_DIR=${APP_DIR}
+LOCAL_VERSION=${CURRENT_VERSION}
 EOF
 
     # 本地证书模式注入每日凌晨平滑重载
@@ -859,6 +863,12 @@ print('true' if l_remote > l_local else 'false')
         log_info "正在下载最新脚本 [${target_script}]..."
         curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPO}/main/naive-manager.sh" -o "${target_script}"
         chmod +x "${target_script}"
+
+        # 将新版本号直接持久化固化进脚本和 .env 中
+        sed -i "s/^CURRENT_VERSION=.*/CURRENT_VERSION=\"${latest_tag}\"/" "${target_script}" 2>/dev/null || true
+        if [[ -f "${ENV_FILE}" ]]; then
+            sed -i "s/^LOCAL_VERSION=.*/LOCAL_VERSION=\"${latest_tag}\"/" "${ENV_FILE}" 2>/dev/null || echo "LOCAL_VERSION=\"${latest_tag}\"" >> "${ENV_FILE}"
+        fi
 
         if [[ -f "${COMPOSE_FILE}" ]]; then
             log_info "正在拉取最新 Docker 镜像并平滑重启容器..."

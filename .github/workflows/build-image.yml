@@ -145,6 +145,10 @@ jobs:
             ghcr.io/${{ env.OWNER }}/naive-caddy:${{ env.RELEASE_TAG }}
             ghcr.io/${{ env.OWNER }}/naive-caddy:${{ github.sha }}
 
+      - name: Inject Release Version into Manager Script
+        run: |
+          sed -i "s/^CURRENT_VERSION=.*/CURRENT_VERSION=\"${{ env.RELEASE_TAG }}\"/" naive-manager.sh
+
       - name: Create GitHub Release
         id: create_release
         uses: softprops/action-gh-release@v2
