@@ -812,14 +812,30 @@ check_version_and_update() {
         return
     fi
 
-    # 提取主版本号 (例如 v2026.10.21-xxxx -> v2026.10.21) 用于智能对比
-    local norm_local="${CURRENT_VERSION%%-*}"
-    local norm_remote="${latest_tag%%-*}"
-
     echo -e " 本地脚本版本 : ${CYAN}${CURRENT_VERSION}${PLAIN}"
     echo -e " 线上最新版本 : ${GREEN}${latest_tag}${PLAIN}"
 
-    if [[ "${CURRENT_VERSION}" == "${latest_tag}" || "${norm_local}" == "${norm_remote}" ]]; then
+    # 精确版本大小比较引擎 (比较点分数字数组: 如 2026.10.21.1800 > 2026.10.21.1630)
+    local has_update
+    has_update=$(python3 -c "
+import sys
+def to_list(v):
+    v = v.lstrip('v')
+    res = []
+    for s in v.replace('-', '.').split('.'):
+        if s.isdigit():
+            res.append(int(s))
+        else:
+            break
+    return res
+
+l_local = to_list(sys.argv[1])
+l_remote = to_list(sys.argv[2])
+# 如果两者前缀相同且长度相等，判定无更新
+print('true' if l_remote > l_local else 'false')
+" "${CURRENT_VERSION}" "${latest_tag}" 2>/dev/null || echo "false")
+
+    if [[ "$has_update" != "true" || "${CURRENT_VERSION}" == "${latest_tag}" ]]; then
         log_info "当前已是最新版本，无需更新！"
         read -rp "按回车键返回..."
         return
@@ -835,7 +851,6 @@ check_version_and_update() {
     read -rp "是否立即执行在线平滑更新？[Y/n]: " do_update
     do_update="${do_update:-Y}"
     if [[ "$do_update" =~ ^[Yy]$ ]]; then
-        # 确保下载目标绝对路径有效
         local target_script="${SCRIPT_PATH}"
         if [[ -z "$target_script" || "$target_script" == "." || "$target_script" == "/" ]]; then
             target_script="${APP_DIR}/naive-manager.sh"

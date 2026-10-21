@@ -1,7 +1,7 @@
 name: Build and Push MultiArch Naive-Caddy
 
 on:
-  workflow_dispatch: # 支持在 GitHub 网页手动点击触发构建
+  workflow_dispatch: # 支持手动点击一键立即构建
   push:
     branches:
       - main
@@ -10,10 +10,58 @@ on:
       - 'web/**'
       - '.github/workflows/build-image.yml'
   schedule:
-    - cron: '0 0 1 * *' # 每月 1 号定时触发拉取最新依赖并编译
+    - cron: '0 */6 * * *' # 每 6 小时自动巡检一次上游更新
 
 jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      upstream_sha: ${{ steps.check.outputs.upstream_sha }}
+      upstream_msg: ${{ steps.check.outputs.upstream_msg }}
+    steps:
+      - name: Check Upstream Commits
+        id: check
+        run: |
+          # 1. 如果是手动触发或推送代码，无条件执行构建
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ github.event_name }}" = "push" ]; then
+            echo "Triggered by ${{ github.event_name }}, proceeding with build."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 2. 定时巡检模式：获取上游 klzgrad/forwardproxy:naive 最新的 Commit 信息
+          UPSTREAM_API="https://api.github.com/repos/klzgrad/forwardproxy/commits/naive"
+          UPSTREAM_JSON=$(curl -s --max-time 10 "$UPSTREAM_API" || true)
+          UPSTREAM_SHA=$(echo "$UPSTREAM_JSON" | jq -r '.sha // empty')
+          UPSTREAM_MSG=$(echo "$UPSTREAM_JSON" | jq -r '.commit.message // empty' | head -n 1)
+
+          if [ -z "$UPSTREAM_SHA" ]; then
+            echo "Failed to query upstream API, skipping."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 3. 获取我方仓库最新的 Release 记录，对比其绑定的上游 SHA
+          MY_LATEST_RELEASE=$(curl -s --max-time 10 "https://api.github.com/repos/${{ github.repository }}/releases/latest" || true)
+          LAST_SEEN_SHA=$(echo "$MY_LATEST_RELEASE" | grep -o 'Upstream-SHA: [a-f0-9]*' | cut -d' ' -f2 || true)
+
+          echo "Latest Upstream SHA: $UPSTREAM_SHA"
+          echo "Last Recorded SHA:   $LAST_SEEN_SHA"
+
+          if [ "$UPSTREAM_SHA" != "$LAST_SEEN_SHA" ]; then
+            echo "Upstream has new commits! Triggering build."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+            echo "upstream_msg=$UPSTREAM_MSG" >> "$GITHUB_OUTPUT"
+          else
+            echo "No changes in upstream. Sleeping."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: check-upstream
+    if: needs.check-upstream.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write # 授予创建 GitHub Release 与 Tags 的权限
@@ -23,10 +71,11 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Generate Release Tag
+      - name: Generate Precise Release Tag
         id: tag_gen
         run: |
-          TAG_NAME="v$(date +'%Y.%m.%d')"
+          # 采用带时分的时间戳版本号，完美保证单调递增，一天多次更新绝不冲突重名
+          TAG_NAME="v$(date +'%Y.%m.%d.%H%M')"
           echo "RELEASE_TAG=${TAG_NAME}" >> "$GITHUB_ENV"
 
       - name: Set up Go
@@ -44,9 +93,11 @@ jobs:
           CADDY_VERSION="$(cat /tmp/forwardproxy/CADDY_VERSION)"
           echo "CADDY_VERSION=${CADDY_VERSION}" >> "$GITHUB_ENV"
 
-          # 获取上游 forwardproxy 最新 commit 信息记录更新日志
           UPSTREAM_MSG=$(git -C /tmp/forwardproxy log -1 --pretty=format:"%s (%h)")
           echo "UPSTREAM_MSG=${UPSTREAM_MSG}" >> "$GITHUB_ENV"
+
+          UPSTREAM_FULL_SHA=$(git -C /tmp/forwardproxy rev-parse HEAD)
+          echo "UPSTREAM_FULL_SHA=${UPSTREAM_FULL_SHA}" >> "$GITHUB_ENV"
 
           git clone --depth 1 -b "$CADDY_VERSION" https://github.com/caddyserver/caddy.git /tmp/caddy-bbr
           cd /tmp/caddy-bbr
@@ -108,6 +159,8 @@ jobs:
             - **核心通信扩展**: `${{ env.UPSTREAM_MSG }}`
             - **DNS 自动化扩展**: `caddy-dns/cloudflare` (支持 Cloudflare DNS-01 自动签发续期)
             - **多架构支持**: `linux/amd64` (x86_64) / `linux/arm64` (aarch64)
+
+            <!-- Upstream-SHA: ${{ env.UPSTREAM_FULL_SHA }} -->
 
             ### 🐳 容器镜像拉取
             ```bash
