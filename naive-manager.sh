@@ -343,10 +343,15 @@ install_or_reconfig() {
             echo -e "${YELLOW}提示: 前往 Cloudflare -> My Profile -> API Tokens -> 创建拥有 'Zone - DNS - Edit' 权限的 Token。${PLAIN}"
             read -rp "请输入 Cloudflare API Token: " CF_API_TOKEN
             if [[ "$CF_API_TOKEN" == "0" || "$CF_API_TOKEN" == "b" ]]; then return; fi
+            # 去除首尾可能误复制的空格或制表符
+            CF_API_TOKEN=$(echo "$CF_API_TOKEN" | tr -d ' \r\n\t')
             while [[ -z "$CF_API_TOKEN" ]]; do
                 read -rp "Token 不能为空，请重新输入: " CF_API_TOKEN
                 if [[ "$CF_API_TOKEN" == "0" || "$CF_API_TOKEN" == "b" ]]; then return; fi
+                CF_API_TOKEN=$(echo "$CF_API_TOKEN" | tr -d ' \r\n\t')
             done
+            local token_len=${#CF_API_TOKEN}
+            log_info "Cloudflare API Token 格式已确认！(Token 长度: ${token_len} 位)"
         elif [[ "$cert_choice" == "2" ]]; then
             CERT_TYPE="local_file"
             detect_ssl_certs "$DOMAIN"
@@ -458,8 +463,9 @@ install_or_reconfig() {
         # 高位端口双监听，保证全源代理隧道成功
         site_addr=":${LISTEN_PORT}, ${DOMAIN}:${LISTEN_PORT}"
         if [[ "$CERT_TYPE" == "cloudflare" ]]; then
+            # 直接注入用户提供的真实 Token，彻底避免环境变量展开为空的隐患
             tls_directive="tls {
-        dns cloudflare {$CF_API_TOKEN}
+        dns cloudflare ${CF_API_TOKEN}
     }"
         else
             tls_directive="tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem"
@@ -544,7 +550,8 @@ CERT_TYPE=${CERT_TYPE}
 CONTAINER_NAME=${CONTAINER_NAME}
 IMAGE_NAME=${IMAGE_NAME}
 APP_DIR=${APP_DIR}
-IMAGE_VERSION=${CURRENT_VERSION}
+IMAGE_VERSION=${CURRENT_IMAGE_VERSION}
+CF_API_TOKEN=${CF_API_TOKEN}
 EOF
 
     # 本地证书模式注入每日凌晨平滑重载
