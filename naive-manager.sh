@@ -897,26 +897,17 @@ check_version_and_update() {
     echo -e " 当前运行镜像版本 : ${CYAN}${CURRENT_IMAGE_VERSION}${PLAIN}"
     echo -e " 线上最新发布镜像 : ${GREEN}${latest_tag}${PLAIN}"
 
-    # 精确比较数字版本大小 (例如 2026.10.21.1800 > 2026.10.21.0846)
-    local has_update
-    has_update=$(python3 -c "
-import sys
-def to_list(v):
-    v = v.lstrip('v')
-    res = []
-    for s in v.replace('-', '.').split('.'):
-        if s.isdigit():
-            res.append(int(s))
-        else:
-            break
-    return res
+    # 纯原生 Linux sort -V 版本对比引擎 (零外部依赖，100% 精确对比时间戳版本大小)
+    local has_update="false"
+    if [[ "${CURRENT_IMAGE_VERSION}" != "${latest_tag}" ]]; then
+        local older
+        older=$(printf "%s\n%s\n" "${CURRENT_IMAGE_VERSION}" "${latest_tag}" | sort -V | head -n 1)
+        if [[ "$older" == "${CURRENT_IMAGE_VERSION}" ]]; then
+            has_update="true"
+        fi
+    fi
 
-l_local = to_list(sys.argv[1])
-l_remote = to_list(sys.argv[2])
-print('true' if l_remote > l_local else 'false')
-" "${CURRENT_IMAGE_VERSION}" "${latest_tag}" 2>/dev/null || echo "false")
-
-    if [[ "$has_update" != "true" || "${CURRENT_IMAGE_VERSION}" == "${latest_tag}" ]]; then
+    if [[ "$has_update" != "true" ]]; then
         log_info "当前核心底座镜像已是最新版本，无需更新！"
         read -rp "按回车键返回..."
         return
