@@ -145,10 +145,6 @@ jobs:
             ghcr.io/${{ env.OWNER }}/naive-caddy:${{ env.RELEASE_TAG }}
             ghcr.io/${{ env.OWNER }}/naive-caddy:${{ github.sha }}
 
-      - name: Inject Release Version into Manager Script
-        run: |
-          sed -i "s/^CURRENT_VERSION=.*/CURRENT_VERSION=\"${{ env.RELEASE_TAG }}\"/" naive-manager.sh
-
       - name: Create GitHub Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -156,17 +152,18 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           name: "Release ${{ env.RELEASE_TAG }}"
           body: |
-            ## 🚀 Naive-Caddy 服务自动发布版本
+            ## 🚀 Naive-Caddy 核心镜像构建发布
 
-            ### 📝 更新概览与版本详情
-            - **Caddy 核心底座**: `${{ env.CADDY_VERSION }}` (集成 `sing-quic BBRv1` 拥塞控制算法)
-            - **核心通信扩展**: `${{ env.UPSTREAM_MSG }}`
-            - **DNS 自动化扩展**: `caddy-dns/cloudflare` (支持 Cloudflare DNS-01 自动签发续期)
-            - **多架构支持**: `linux/amd64` (x86_64) / `linux/arm64` (aarch64)
+            ### 📝 核心组件版本明细清单
+            - 🌐 **Caddy 官方底座**: `${{ env.CADDY_VERSION }}`
+            - 🛡️ **Naive 核心网络栈**: `klzgrad/forwardproxy@naive` (${{ env.UPSTREAM_MSG }})
+            - ⚡ **QUIC 拥塞控制算法**: `sagernet/sing-quic (BBRv1)` (专为抗丢包单边加速定制)
+            - 🔑 **DNS 自动化签发插件**: `caddy-dns/cloudflare` (原生 Cloudflare DNS-01 验证)
+            - 🖥️ **支持硬件架构**: `linux/amd64` (x86_64) / `linux/arm64` (aarch64)
 
             <!-- Upstream-SHA: ${{ env.UPSTREAM_FULL_SHA }} -->
 
-            ### 🐳 容器镜像拉取
+            ### 🐳 Docker 镜像拉取
             ```bash
             docker pull ghcr.io/${{ env.OWNER }}/naive-caddy:latest
             docker pull ghcr.io/${{ env.OWNER }}/naive-caddy:${{ env.RELEASE_TAG }}

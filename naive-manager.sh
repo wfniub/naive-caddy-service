@@ -12,8 +12,9 @@
 #   - 优雅返回上一级支持，交互通俗美观
 # ==============================================================================
 
-# 当前客户端脚本版本
-CURRENT_VERSION="v2026.10.21"
+# 当前服务与控制台常量
+SCRIPT_VERSION="v2026.10.21"
+CURRENT_IMAGE_VERSION="v2026.10.21"
 GITHUB_REPO="wfniub/naive-caddy-service"
 
 IMAGE_NAME="ghcr.io/wfniub/naive-caddy:latest"
@@ -160,8 +161,10 @@ load_env() {
     if [[ -f "${ENV_FILE}" ]]; then
         # shellcheck source=/dev/null
         source "${ENV_FILE}"
-        if [[ -n "$LOCAL_VERSION" ]]; then
-            CURRENT_VERSION="$LOCAL_VERSION"
+        if [[ -n "$IMAGE_VERSION" ]]; then
+            CURRENT_IMAGE_VERSION="$IMAGE_VERSION"
+        elif [[ -n "$LOCAL_VERSION" ]]; then
+            CURRENT_IMAGE_VERSION="$LOCAL_VERSION"
         fi
     fi
 }
@@ -541,7 +544,7 @@ CERT_TYPE=${CERT_TYPE}
 CONTAINER_NAME=${CONTAINER_NAME}
 IMAGE_NAME=${IMAGE_NAME}
 APP_DIR=${APP_DIR}
-LOCAL_VERSION=${CURRENT_VERSION}
+IMAGE_VERSION=${CURRENT_VERSION}
 EOF
 
     # 本地证书模式注入每日凌晨平滑重载
@@ -800,10 +803,11 @@ reload_caddy() {
 }
 
 # ------------------------------------------------------------------------------
-# 版本检测与在线平滑升级模块
+# 核心镜像版本检测与在线平滑升级模块 (只更新底层镜像，脚本自身保持稳定)
 # ------------------------------------------------------------------------------
 check_version_and_update() {
-    echo -e "\n${CYAN}---------------- 正在检测线上最新发布版本 ----------------${PLAIN}"
+    load_env
+    echo -e "\n${CYAN}---------------- 正在检测线上最新发布镜像 ----------------${PLAIN}"
     local latest_info
     latest_info=$(curl -s --max-time 5 "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null || true)
     local latest_tag
@@ -811,15 +815,15 @@ check_version_and_update() {
 
     if [[ -z "$latest_tag" ]]; then
         log_warn "未能获取到 GitHub 最新版本信息 (可能是网络波动或未发布 Release)。"
-        echo -e "当前本地脚本版本: ${GREEN}${CURRENT_VERSION}${PLAIN}"
+        echo -e "当前本地运行镜像版本: ${GREEN}${CURRENT_IMAGE_VERSION}${PLAIN}"
         read -rp "按回车键返回..."
         return
     fi
 
-    echo -e " 本地脚本版本 : ${CYAN}${CURRENT_VERSION}${PLAIN}"
-    echo -e " 线上最新版本 : ${GREEN}${latest_tag}${PLAIN}"
+    echo -e " 当前运行镜像版本 : ${CYAN}${CURRENT_IMAGE_VERSION}${PLAIN}"
+    echo -e " 线上最新发布镜像 : ${GREEN}${latest_tag}${PLAIN}"
 
-    # 精确版本大小比较引擎 (比较点分数字数组: 如 2026.10.21.1800 > 2026.10.21.1630)
+    # 精确比较数字版本大小 (例如 2026.10.21.1800 > 2026.10.21.0846)
     local has_update
     has_update=$(python3 -c "
 import sys
@@ -835,50 +839,44 @@ def to_list(v):
 
 l_local = to_list(sys.argv[1])
 l_remote = to_list(sys.argv[2])
-# 如果两者前缀相同且长度相等，判定无更新
 print('true' if l_remote > l_local else 'false')
-" "${CURRENT_VERSION}" "${latest_tag}" 2>/dev/null || echo "false")
+" "${CURRENT_IMAGE_VERSION}" "${latest_tag}" 2>/dev/null || echo "false")
 
-    if [[ "$has_update" != "true" || "${CURRENT_VERSION}" == "${latest_tag}" ]]; then
-        log_info "当前已是最新版本，无需更新！"
+    if [[ "$has_update" != "true" || "${CURRENT_IMAGE_VERSION}" == "${latest_tag}" ]]; then
+        log_info "当前核心底座镜像已是最新版本，无需更新！"
         read -rp "按回车键返回..."
         return
     fi
 
-    echo -e "\n${YELLOW}🔔 检测到有新版本发布 [${latest_tag}]！${PLAIN}"
+    echo -e "\n${YELLOW}🔔 检测到有新版核心镜像发布 [${latest_tag}]！${PLAIN}"
     local body_log
-    body_log=$(echo "$latest_info" | grep -A 10 '"body":' | head -n 8 | sed 's/\\r\\n/\n/g' | sed 's/\"body\": \"//' || true)
+    body_log=$(echo "$latest_info" | grep -A 12 '"body":' | head -n 10 | sed 's/\\r\\n/\n/g' | sed 's/\"body\": \"//' || true)
     if [[ -n "$body_log" ]]; then
         echo -e "${CYAN}【更新摘要】:${PLAIN}\n${body_log}\n"
     fi
 
-    read -rp "是否立即执行在线平滑更新？[Y/n]: " do_update
+    read -rp "是否立即拉取最新镜像平滑重建容器？[Y/n]: " do_update
     do_update="${do_update:-Y}"
     if [[ "$do_update" =~ ^[Yy]$ ]]; then
-        local target_script="${SCRIPT_PATH}"
-        if [[ -z "$target_script" || "$target_script" == "." || "$target_script" == "/" ]]; then
-            target_script="${APP_DIR}/naive-manager.sh"
+        if [[ ! -f "${COMPOSE_FILE}" ]]; then
+            log_err "未在当前目录找到 docker-compose.yml，请先完成节点安装！"
+            read -rp "按回车键返回..."
+            return
         fi
 
-        log_info "正在下载最新脚本 [${target_script}]..."
-        curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPO}/main/naive-manager.sh" -o "${target_script}"
-        chmod +x "${target_script}"
+        log_info "正在拉取最新 Docker 核心镜像 [${IMAGE_NAME}]..."
+        cd "${APP_DIR}"
+        $DOCKER_COMPOSE_CMD pull || true
+        $DOCKER_COMPOSE_CMD up -d --remove-orphans || true
 
-        # 将新版本号直接持久化固化进脚本和 .env 中
-        sed -i "s/^CURRENT_VERSION=.*/CURRENT_VERSION=\"${latest_tag}\"/" "${target_script}" 2>/dev/null || true
+        # 固化保存当前镜像版本
+        CURRENT_IMAGE_VERSION="${latest_tag}"
         if [[ -f "${ENV_FILE}" ]]; then
-            sed -i "s/^LOCAL_VERSION=.*/LOCAL_VERSION=\"${latest_tag}\"/" "${ENV_FILE}" 2>/dev/null || echo "LOCAL_VERSION=\"${latest_tag}\"" >> "${ENV_FILE}"
+            sed -i "s/^IMAGE_VERSION=.*/IMAGE_VERSION=\"${latest_tag}\"/" "${ENV_FILE}" 2>/dev/null || echo "IMAGE_VERSION=\"${latest_tag}\"" >> "${ENV_FILE}"
         fi
 
-        if [[ -f "${COMPOSE_FILE}" ]]; then
-            log_info "正在拉取最新 Docker 镜像并平滑重启容器..."
-            cd "${APP_DIR}"
-            $DOCKER_COMPOSE_CMD pull || true
-            $DOCKER_COMPOSE_CMD up -d --remove-orphans || true
-        fi
         log_info "🎉 平滑升级完成！现有配置、证书及用户凭据完全保持不变。"
-        read -rp "按回车键重新载入新版本..."
-        exec bash "${target_script}"
+        read -rp "按回车键返回..."
     else
         log_info "已取消更新。"
         read -rp "按回车键返回..."
@@ -920,12 +918,12 @@ main_menu() {
         echo -e "${CYAN}║                 🛡️  Naive-Caddy 服务管理面板                 ║${PLAIN}"
         echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${PLAIN}"
         echo -e " 📂 当前工作目录 : ${GREEN}${APP_DIR}${PLAIN}"
-        echo -e " 🏷️  当前脚本版本 : ${CYAN}${CURRENT_VERSION}${PLAIN}"
+        echo -e " 🏷️  核心镜像版本 : ${CYAN}${CURRENT_IMAGE_VERSION}${PLAIN}"
         echo -e " 🐳 容器运行状态 : $(docker ps --format '{{.Names}} ({{.Status}})' | grep "${CONTAINER_NAME}" || echo -e "${RED}未运行${PLAIN}")"
         echo -e "${CYAN}──────────────────────────────────────────────────────────────${PLAIN}"
         echo -e "  ${BOLD}1.${PLAIN} 安装 / 重新配置节点 (全托管模式 / 独立高位端口模式)"
         echo -e "  ${BOLD}2.${PLAIN} 👤 节点账号与凭据管理 (查看链接/扫码二维码/增删改用户)"
-        echo -e "  ${BOLD}3.${PLAIN} 🔔 检查版本与在线平滑更新 (检测 GitHub Release 与新镜像)"
+        echo -e "  ${BOLD}3.${PLAIN} 🔔 检查核心镜像版本与在线平滑升级"
         echo -e "  ${BOLD}4.${PLAIN} 查看实时连接与访问日志"
         echo -e "  ${BOLD}5.${PLAIN} 重启容器服务"
         echo -e "  ${BOLD}6.${PLAIN} 平滑热重载 Caddy 配置与证书 (内存级重载，长连接不断流)"
