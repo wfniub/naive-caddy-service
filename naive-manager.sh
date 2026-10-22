@@ -253,10 +253,10 @@ install_or_reconfig() {
         if [[ "$DOMAIN" == "0" || "$DOMAIN" == "b" ]]; then return; fi
     done
 
-    # 3. 初始连接账号密码
+    # 3. 初始连接账号密码 (字符集严格过滤 URL 保留字符如 #/?@:，确保导入链接与二维码 100% 兼容)
     echo -e "\n${BOLD}[步骤 3/6] 连接认证凭据设置${PLAIN}"
     local default_user="usr_$(tr -dc a-z0-9 </dev/urandom | head -c 6)"
-    local default_pass="$(tr -dc A-Za-z0-9#%_+ </dev/urandom | head -c 16)"
+    local default_pass="$(tr -dc A-Za-z0-9_ </dev/urandom | head -c 16)"
 
     read -rp "设置初始用户名 [直接回车默认: ${default_user}]: " USERNAME
     if [[ "$USERNAME" == "0" || "$USERNAME" == "b" ]]; then return; fi
@@ -561,7 +561,15 @@ ${cert_mounts}
 ${env_cf}
 EOF
 
-    # 保存元数据
+    # 保存元数据 (获取当前线上最新版本或继承已有版本号)
+    local save_ver="${CURRENT_IMAGE_VERSION}"
+    local online_latest_tag
+    online_latest_tag=$(curl -s --max-time 3 "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | head -n 1 | cut -d'"' -f4 || true)
+    if [[ -n "$online_latest_tag" ]]; then
+        save_ver="$online_latest_tag"
+        CURRENT_IMAGE_VERSION="$online_latest_tag"
+    fi
+
     cat <<EOF > "${ENV_FILE}"
 DOMAIN=${DOMAIN}
 MODE=${MODE}
@@ -570,7 +578,7 @@ CERT_TYPE=${CERT_TYPE}
 CONTAINER_NAME=${CONTAINER_NAME}
 IMAGE_NAME=${IMAGE_NAME}
 APP_DIR=${APP_DIR}
-IMAGE_VERSION=${CURRENT_IMAGE_VERSION}
+IMAGE_VERSION=${save_ver}
 CF_API_TOKEN=${CF_API_TOKEN}
 EOF
 
@@ -630,6 +638,9 @@ EOF
     elif [[ $is_healthy -eq 0 ]]; then
         log_warn "服务仍在后台初始化申请证书中，请留意日志。"
     fi
+
+    # 首次启动保障：针对初次证书签发与端口套接字绑定执行一次平滑生效
+    docker exec "${CONTAINER_NAME}" caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
 
     # 展示完整凭据与二维码
     show_user_credentials "${USERNAME}" "${PASSWORD}"
@@ -747,7 +758,7 @@ list_all_accounts() {
 add_user_account() {
     echo -e "\n${BOLD}【添加新用户账号】${PLAIN} (输入 0 或 b 随时取消)"
     local default_new_user="usr_$(tr -dc a-z0-9 </dev/urandom | head -c 6)"
-    local default_new_pass="$(tr -dc A-Za-z0-9#%_+ </dev/urandom | head -c 16)"
+    local default_new_pass="$(tr -dc A-Za-z0-9_ </dev/urandom | head -c 16)"
 
     read -rp "请输入新用户名 [回车默认: ${default_new_user}]: " new_user
     if [[ "$new_user" == "0" || "$new_user" == "b" ]]; then return; fi
@@ -842,7 +853,7 @@ modify_user_password() {
         return
     fi
 
-    local gen_pass="$(tr -dc A-Za-z0-9#%_+ </dev/urandom | head -c 16)"
+    local gen_pass="$(tr -dc A-Za-z0-9_ </dev/urandom | head -c 16)"
     read -rp "请输入新密码 [直接回车随机生成: ${gen_pass}]: " edit_pass
     if [[ "$edit_pass" == "0" || "$edit_pass" == "b" ]]; then return; fi
     edit_pass="${edit_pass:-$gen_pass}"
@@ -974,6 +985,7 @@ uninstall_service() {
 }
 
 main_menu() {
+    load_env
     check_root
     check_dependencies
 
