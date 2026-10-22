@@ -595,14 +595,21 @@ EOF
     # ---------------- 启动与证书状态巡检 ----------------
     echo -e "\n${CYAN}---------------- 正在验证容器启动与证书就绪状态 ----------------${PLAIN}"
     local is_healthy=0
-    for ((i=1; i<=15; i++)); do
+    local cert_ready=0
+
+    # 本地已有证书模式通常 3~5 秒就绪；Cloudflare DNS-01 远程核验通常需要 10~25 秒
+    local max_wait=15
+    [[ "$CERT_TYPE" == "cloudflare" || "$CERT_TYPE" == "acme_http" ]] && max_wait=30
+
+    for ((i=1; i<=max_wait; i++)); do
         local c_status
         c_status=$(docker inspect -f '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null || echo "missing")
 
         if [[ "$c_status" == "running" ]]; then
-            # 检查是否有致命报错
             local recent_logs
-            recent_logs=$(docker logs --tail 25 "${CONTAINER_NAME}" 2>&1 || true)
+            recent_logs=$(docker logs --tail 30 "${CONTAINER_NAME}" 2>&1 || true)
+
+            # 检查致命错误
             if echo "$recent_logs" | grep -qiE "error.*loading.*config|fatal.*caddy|API token.*invalid"; then
                 log_err "检测到 Caddy 配置或证书加载异常！"
                 echo -e "${RED}最新错误日志:${PLAIN}"
@@ -611,11 +618,25 @@ EOF
                 break
             fi
 
-            # 检查是否成功启动 HTTP 服务器
-            if echo "$recent_logs" | grep -q "serving initial configuration"; then
-                log_info "Caddy 服务已成功加载配置并就绪运行！(耗时 ${i}s)"
+            # 检查证书是否已正式签发入库
+            if echo "$recent_logs" | grep -q "certificate obtained successfully"; then
+                cert_ready=1
                 is_healthy=1
+                log_info "SSL 证书已成功申请并就绪！(耗时 ${i}s)"
                 break
+            fi
+
+            # 如果是非 ACME 模式 (本地现成证书)，检查服务是否启动
+            if [[ "$CERT_TYPE" == "local_file" ]] && echo "$recent_logs" | grep -q "serving initial configuration"; then
+                cert_ready=1
+                is_healthy=1
+                log_info "Caddy 服务已成功加载配置与本地证书！(耗时 ${i}s)"
+                break
+            fi
+
+            # 提示后台动态
+            if [[ $((i % 5)) -eq 0 ]]; then
+                echo -e "${YELLOW}[⏳] 正在等待 Let's Encrypt 官方核验域名并下发证书 (${i}s/${max_wait}s)...${PLAIN}"
             fi
         elif [[ "$c_status" == "restarting" ]]; then
             log_warn "容器处于异常重启状态，正在抓取错误原因..."
@@ -636,10 +657,10 @@ EOF
         read -rp "按回车键返回主菜单..."
         return
     elif [[ $is_healthy -eq 0 ]]; then
-        log_warn "服务仍在后台初始化申请证书中，请留意日志。"
+        log_warn "服务已启动，Let's Encrypt 证书仍在后台最终签发中，稍后连接即可。"
     fi
 
-    # 首次启动保障：针对初次证书签发与端口套接字绑定执行一次平滑生效
+    # 首次启动热重载保障：证书下发后热绑定 TLS 套接字
     docker exec "${CONTAINER_NAME}" caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
 
     # 展示完整凭据与二维码
